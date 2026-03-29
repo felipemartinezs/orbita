@@ -4,7 +4,7 @@ import { AffineTransform, CalibrationPoint, GpsPoint, PixelPoint, PlanSourceType
 import { gpsToPixel } from '@/lib/affine';
 
 // Module-level singleton so the lib is only loaded once
-let pdfjsLib: typeof import('pdfjs-dist') | null = null;
+let pdfjsLib: typeof import('pdfjs-dist/legacy/build/pdf.mjs') | null = null;
 let workerConfigured = false;
 
 interface PlanViewerProps {
@@ -44,14 +44,6 @@ export default function PlanViewer({
   const lastTouchRef = useRef<{ x: number; y: number; dist: number } | null>(null);
   const animRef = useRef<number>(0);
 
-  const shouldDisablePdfWorker = useCallback(() => {
-    if (typeof navigator === 'undefined') return false;
-    const ua = navigator.userAgent;
-    const isAppleMobile = /iPad|iPhone|iPod/.test(ua);
-    const isWebKit = /WebKit/i.test(ua) && !/CriOS|FxiOS|EdgiOS/i.test(ua);
-    return isAppleMobile && isWebKit;
-  }, []);
-
   // ── Load plan source via ResizeObserver so we know container dims ──
   useEffect(() => {
     let cancelled = false;
@@ -78,11 +70,9 @@ export default function PlanViewer({
     const renderPdf = async (containerW: number, containerH: number) => {
       try {
         if (!pdfjsLib) {
-          pdfjsLib = await import('pdfjs-dist');
+          pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
         }
-        const disableWorker = shouldDisablePdfWorker();
-
-        if (!disableWorker && !workerConfigured) {
+        if (!workerConfigured) {
           pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
           workerConfigured = true;
         }
@@ -90,12 +80,10 @@ export default function PlanViewer({
         const loadingSource = sourceFile
           ? {
               data: new Uint8Array(await sourceFile.arrayBuffer()),
-              disableWorker,
               verbosity: 0,
             }
           : {
               url: sourceUrl,
-              disableWorker,
               verbosity: 0,
             };
 
@@ -202,7 +190,7 @@ export default function PlanViewer({
       observer.disconnect();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceFile, sourceType, sourceUrl, shouldDisablePdfWorker]);
+  }, [sourceFile, sourceType, sourceUrl]);
 
   // ── Draw overlay: blue dot + calibration dots ──────────────────────
   const drawOverlay = useCallback(() => {
