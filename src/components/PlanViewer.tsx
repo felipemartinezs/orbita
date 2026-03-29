@@ -7,7 +7,7 @@ import { gpsToPixel } from '@/lib/affine';
 // Module-level singleton so the lib is only loaded once
 let pdfjsLib: typeof import('pdfjs-dist/legacy/build/pdf.mjs') | null = null;
 let workerConfigured = false;
-const MAX_PDF_RENDER_PIXELS = 14_000_000;
+const MAX_PDF_RENDER_PIXELS = 32_000_000;
 const CONTENT_THRESHOLD = 247;
 const ZOOM_REFRESH_DELAY_MS = 140;
 
@@ -79,7 +79,7 @@ export default function PlanViewer({
   const renderTaskRef = useRef<RenderTask | null>(null);
   const rerenderTimerRef = useRef<number | null>(null);
   const renderVersionRef = useRef(0);
-  const qualityBoostRef = useRef(1);
+  const renderedScaleRef = useRef(1);
 
   const getResolutionFactor = useCallback(() => {
     if (typeof window === 'undefined') return 2;
@@ -168,8 +168,26 @@ export default function PlanViewer({
     const wrapper = containerRef.current?.querySelector<HTMLDivElement>('.plan-wrapper');
     if (!wrapper) return;
     const { x, y, scale } = viewRef.current;
-    wrapper.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+    const { cssWidth, cssHeight } = surfaceRef.current;
+    const displayWidth = cssWidth * scale;
+    const displayHeight = cssHeight * scale;
+
+    wrapper.style.transform = `translate(${x}px, ${y}px)`;
     wrapper.style.transformOrigin = '0 0';
+    wrapper.style.width = `${displayWidth}px`;
+    wrapper.style.height = `${displayHeight}px`;
+
+    const planCanvas = pdfCanvasRef.current;
+    if (planCanvas) {
+      planCanvas.style.width = `${displayWidth}px`;
+      planCanvas.style.height = `${displayHeight}px`;
+    }
+
+    const overlayCanvas = overlayCanvasRef.current;
+    if (overlayCanvas) {
+      overlayCanvas.style.width = `${displayWidth}px`;
+      overlayCanvas.style.height = `${displayHeight}px`;
+    }
   }, []);
 
   const clearScheduledRefresh = useCallback(() => {
@@ -184,7 +202,7 @@ export default function PlanViewer({
     renderVersionRef.current += 1;
     renderTaskRef.current?.cancel();
     renderTaskRef.current = null;
-    qualityBoostRef.current = 1;
+    renderedScaleRef.current = 1;
 
     const currentSession = pdfSessionRef.current;
     pdfSessionRef.current = null;
@@ -194,7 +212,7 @@ export default function PlanViewer({
   }, [clearScheduledRefresh]);
 
   const renderPdfSurface = useCallback(async (
-    requestedBoost: number,
+    requestedScale: number,
     options: { resetView?: boolean; reportRender?: boolean } = {},
   ) => {
     const session = pdfSessionRef.current;
@@ -202,10 +220,9 @@ export default function PlanViewer({
     if (!session || !canvas) return;
 
     const { resetView = false, reportRender = false } = options;
-    const boundedBoost = Math.min(Math.max(requestedBoost, 1), 8);
-    const targetScale = session.logicalScale * session.resolutionFactor * boundedBoost;
+    const boundedScale = Math.min(Math.max(requestedScale, 1), 8);
+    const targetScale = session.logicalScale * session.resolutionFactor * boundedScale * 1.15;
     const renderScale = clampRenderScale(session.naturalWidth, session.naturalHeight, targetScale);
-    const effectiveBoost = Math.max(1, renderScale / (session.logicalScale * session.resolutionFactor));
     const viewport = session.page.getViewport({ scale: renderScale });
     const renderCanvas = document.createElement('canvas');
     renderCanvas.width = Math.max(1, Math.floor(viewport.width));
@@ -238,8 +255,6 @@ export default function PlanViewer({
 
     canvas.width = cropW;
     canvas.height = cropH;
-    canvas.style.width = `${session.cssWidth}px`;
-    canvas.style.height = `${session.cssHeight}px`;
 
     const visibleCtx = canvas.getContext('2d', { alpha: false });
     if (!visibleCtx) {
@@ -252,15 +267,13 @@ export default function PlanViewer({
     visibleCtx.drawImage(renderCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
 
     renderTaskRef.current = null;
-    qualityBoostRef.current = effectiveBoost;
+    renderedScaleRef.current = boundedScale;
 
     if (resetView) {
       const overlay = overlayCanvasRef.current;
       if (overlay) {
         overlay.width = Math.max(1, Math.floor(session.cssWidth * session.resolutionFactor));
         overlay.height = Math.max(1, Math.floor(session.cssHeight * session.resolutionFactor));
-        overlay.style.width = `${session.cssWidth}px`;
-        overlay.style.height = `${session.cssHeight}px`;
       }
 
       surfaceRef.current = {
@@ -285,16 +298,16 @@ export default function PlanViewer({
     if (sourceType !== 'pdf') return;
     if (!pdfSessionRef.current) return;
 
-    const currentBoost = qualityBoostRef.current;
-    const targetBoost = Math.min(Math.max(viewRef.current.scale * 1.15, 1), 6);
-    const relativeDelta = Math.abs(targetBoost - currentBoost) / Math.max(currentBoost, 1);
+    const currentScale = renderedScaleRef.current;
+    const targetScale = Math.min(Math.max(viewRef.current.scale, 1), 8);
+    const relativeDelta = Math.abs(targetScale - currentScale) / Math.max(currentScale, 1);
 
     if (relativeDelta < 0.2) return;
 
     clearScheduledRefresh();
     rerenderTimerRef.current = window.setTimeout(() => {
       rerenderTimerRef.current = null;
-      void renderPdfSurface(targetBoost).catch((refreshError: unknown) => {
+      void renderPdfSurface(targetScale).catch((refreshError: unknown) => {
         if (!isCancelledRender(refreshError)) {
           console.error('PDF refresh error:', refreshError);
         }
