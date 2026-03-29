@@ -30,6 +30,13 @@ export default function Home() {
   const geo    = useGeolocation();
   const { transform } = useAffineMap(calibrationPoints);
 
+  useEffect(() => {
+    if ((screen === 'calibrate' || screen === 'viewer') && !geo.watching && geo.permissionState !== 'denied') {
+      geo.start();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geo.permissionState, geo.start, geo.watching, screen]);
+
   // ── Build demo calibration from canvas size + current GPS ─────────
   const buildDemoCalibration = useCallback((
     canvasW: number, canvasH: number, scale: number,
@@ -83,26 +90,6 @@ export default function Home() {
     const { w, h, scale } = demoCanvasRef.current;
     buildDemoCalibration(w, h, scale, geo.position);
   }, [isDemoMode, geo.position, buildDemoCalibration]);
-
-  // ── Demo mode: load PDF immediately, calibrate whenever GPS ready ──
-  const loadDemoMode = useCallback(async () => {
-    setIsDemoMode(true);
-    demoCalibratedRef.current = false;
-    demoCanvasRef.current = null;
-
-    const res = await fetch('/demo-space.pdf');
-    const blob = await res.blob();
-    const url  = URL.createObjectURL(blob);
-
-    setSourceUrl(url);
-    setSourceType('pdf');
-    setSourceFileName('demo-espacio.pdf');
-    setSourcePlanId(buildStaticPlanId('demo-espacio.pdf'));
-    setSourceFile(null);
-    setCalibrationPoints([]);
-    setScreen('viewer');
-    // Blue dot will appear automatically once GPS resolves
-  }, []);
 
   // ── PlanViewer callback when PDF renders ──────────────────────────
   const onPlanRendered = useCallback((canvasW: number, canvasH: number, scale: number) => {
