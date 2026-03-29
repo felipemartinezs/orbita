@@ -6,12 +6,13 @@ import PlanViewer from './PlanViewer';
 interface CalibrationProps {
   sourceUrl: string;
   sourceType: PlanSourceType;
+  sourceFile?: File | null;
   currentGps: GpsPoint | null;
   onComplete: (points: CalibrationPoint[]) => void;
   onCancel: () => void;
 }
 
-export default function Calibration({ sourceUrl, sourceType, currentGps, onComplete, onCancel }: CalibrationProps) {
+export default function Calibration({ sourceUrl, sourceType, sourceFile, currentGps, onComplete, onCancel }: CalibrationProps) {
   const [points, setPoints] = useState<CalibrationPoint[]>([]);
   const [pendingPixel, setPendingPixel] = useState<PixelPoint | null>(null);
   const [step, setStep] = useState<'tap' | 'gps'>('tap');
@@ -93,6 +94,7 @@ export default function Calibration({ sourceUrl, sourceType, currentGps, onCompl
         <PlanViewer
           sourceUrl={sourceUrl}
           sourceType={sourceType}
+          sourceFile={sourceFile}
           calibrationPoints={pendingPixel ? [...points, { pixel: pendingPixel, gps: { lat: 0, lng: 0 } }] : points}
           transform={null}
           gpsPosition={null}

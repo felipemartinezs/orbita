@@ -15,6 +15,7 @@ export default function Home() {
   const [sourceUrl, setSourceUrl]             = useState<string | null>(null);
   const [sourceType, setSourceType]           = useState<PlanSourceType | null>(null);
   const [sourceFileName, setSourceFileName]   = useState<string>('');
+  const [sourceFile, setSourceFile]           = useState<File | null>(null);
   const [calibrationPoints, setCalibrationPoints] = useState<CalibrationPoint[]>([]);
   const [showMenu, setShowMenu]               = useState(false);
 
@@ -86,6 +87,7 @@ export default function Home() {
     setSourceUrl(url);
     setSourceType('pdf');
     setSourceFileName('demo-espacio.pdf');
+    setSourceFile(null);
     setCalibrationPoints([]);
     setScreen('viewer');
     // Blue dot will appear automatically once GPS resolves
@@ -103,13 +105,14 @@ export default function Home() {
   }, [isDemoMode, geo.position, buildDemoCalibration]);
 
   // ── Regular file upload ───────────────────────────────────────────
-  const onFileSelected = useCallback((file: File, url: string, nextSourceType: PlanSourceType) => {
+  const onFileSelected = useCallback((file: File, nextSourceType: PlanSourceType) => {
     setIsDemoMode(false);
     demoCalibratedRef.current = false;
     demoCanvasRef.current = null;
-    setSourceUrl(url);
+    setSourceUrl(URL.createObjectURL(file));
     setSourceType(nextSourceType);
     setSourceFileName(file.name);
+    setSourceFile(file);
 
     const saved = loadCalibration(file.name);
     if (saved && saved.points.length >= 2) {
@@ -141,6 +144,7 @@ export default function Home() {
     setSourceUrl(null);
     setSourceType(null);
     setSourceFileName('');
+    setSourceFile(null);
     setCalibrationPoints([]);
     setIsDemoMode(false);
     demoCalibratedRef.current = false;
@@ -159,6 +163,7 @@ export default function Home() {
       <Calibration
         sourceUrl={sourceUrl}
         sourceType={sourceType}
+        sourceFile={sourceFile}
         currentGps={geo.position}
         onComplete={onCalibrationComplete}
         onCancel={() => {
@@ -231,6 +236,7 @@ export default function Home() {
         <PlanViewer
           sourceUrl={sourceUrl}
           sourceType={sourceType}
+          sourceFile={sourceFile}
           calibrationPoints={isDemo ? [] : calibrationPoints}
           transform={transform}
           gpsPosition={geo.position}

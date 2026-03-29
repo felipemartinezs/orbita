@@ -3,7 +3,7 @@ import React, { useRef } from 'react';
 import { PlanSourceType } from '@/types';
 
 interface UploadScreenProps {
-  onFileSelected: (file: File, url: string, sourceType: PlanSourceType) => void;
+  onFileSelected: (file: File, sourceType: PlanSourceType) => void;
   onDemoMode: () => void;
 }
 
@@ -25,8 +25,7 @@ export default function UploadScreen({ onFileSelected, onDemoMode }: UploadScree
       window.alert('Selecciona un PDF o una imagen compatible');
       return;
     }
-    const url = URL.createObjectURL(file);
-    onFileSelected(file, url, sourceType);
+    onFileSelected(file, sourceType);
   };
 
   const onInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {

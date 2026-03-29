@@ -10,6 +10,7 @@ let workerConfigured = false;
 interface PlanViewerProps {
   sourceUrl: string;
   sourceType: PlanSourceType;
+  sourceFile?: File | null;
   calibrationPoints: CalibrationPoint[];
   transform: AffineTransform | null;
   gpsPosition: GpsPoint | null;
@@ -23,6 +24,7 @@ interface PlanViewerProps {
 export default function PlanViewer({
   sourceUrl,
   sourceType,
+  sourceFile,
   calibrationPoints,
   transform,
   gpsPosition,
@@ -41,6 +43,14 @@ export default function PlanViewer({
   const viewRef = useRef({ x: 0, y: 0, scale: 1 });
   const lastTouchRef = useRef<{ x: number; y: number; dist: number } | null>(null);
   const animRef = useRef<number>(0);
+
+  const shouldDisablePdfWorker = useCallback(() => {
+    if (typeof navigator === 'undefined') return false;
+    const ua = navigator.userAgent;
+    const isAppleMobile = /iPad|iPhone|iPod/.test(ua);
+    const isWebKit = /WebKit/i.test(ua) && !/CriOS|FxiOS|EdgiOS/i.test(ua);
+    return isAppleMobile && isWebKit;
+  }, []);
 
   // ── Load plan source via ResizeObserver so we know container dims ──
   useEffect(() => {
@@ -70,12 +80,26 @@ export default function PlanViewer({
         if (!pdfjsLib) {
           pdfjsLib = await import('pdfjs-dist');
         }
-        if (!workerConfigured) {
+        const disableWorker = shouldDisablePdfWorker();
+
+        if (!disableWorker && !workerConfigured) {
           pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
           workerConfigured = true;
         }
 
-        const loadingTask = pdfjsLib.getDocument({ url: sourceUrl, verbosity: 0 });
+        const loadingSource = sourceFile
+          ? {
+              data: new Uint8Array(await sourceFile.arrayBuffer()),
+              disableWorker,
+              verbosity: 0,
+            }
+          : {
+              url: sourceUrl,
+              disableWorker,
+              verbosity: 0,
+            };
+
+        const loadingTask = pdfjsLib.getDocument(loadingSource);
         const pdf = await loadingTask.promise;
         if (cancelled) return;
 
@@ -103,11 +127,16 @@ export default function PlanViewer({
         await page.render({ canvasContext: ctx, canvas, viewport }).promise;
         if (cancelled) return;
 
+        await pdf.destroy();
         finalizeRender(containerW, containerH, w, h, scale);
       } catch (e: unknown) {
         if (!cancelled) {
           const msg = e instanceof Error ? e.message : String(e);
-          setError(msg);
+          setError(
+            sourceFile
+              ? `No se pudo abrir este PDF en Safari: ${msg}`
+              : msg
+          );
           console.error('PDF render error:', e);
         }
       }
@@ -173,7 +202,7 @@ export default function PlanViewer({
       observer.disconnect();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceUrl, sourceType]);
+  }, [sourceFile, sourceType, sourceUrl, shouldDisablePdfWorker]);
 
   // ── Draw overlay: blue dot + calibration dots ──────────────────────
   const drawOverlay = useCallback(() => {
