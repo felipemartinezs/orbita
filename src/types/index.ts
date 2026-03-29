@@ -24,6 +24,7 @@ export interface AffineTransform {
 }
 
 export interface SavedCalibration {
+  planId: string;
   fileName: string;
   points: CalibrationPoint[];
   transform: AffineTransform;

@@ -5,6 +5,7 @@ import { useGeolocation } from '@/hooks/useGeolocation';
 import { useAffineMap } from '@/hooks/useAffineMap';
 import { saveCalibration, loadCalibration } from '@/lib/storage';
 import { solveAffine } from '@/lib/affine';
+import { buildPlanId, buildStaticPlanId } from '@/lib/plan-id';
 import UploadScreen from '@/components/UploadScreen';
 import Calibration from '@/components/Calibration';
 import PlanViewer from '@/components/PlanViewer';
@@ -15,6 +16,7 @@ export default function Home() {
   const [sourceUrl, setSourceUrl]             = useState<string | null>(null);
   const [sourceType, setSourceType]           = useState<PlanSourceType | null>(null);
   const [sourceFileName, setSourceFileName]   = useState<string>('');
+  const [sourcePlanId, setSourcePlanId]       = useState<string>('');
   const [sourceFile, setSourceFile]           = useState<File | null>(null);
   const [calibrationPoints, setCalibrationPoints] = useState<CalibrationPoint[]>([]);
   const [showMenu, setShowMenu]               = useState(false);
@@ -61,7 +63,15 @@ export default function Home() {
     ];
 
     const t = solveAffine(points);
-    if (t) saveCalibration({ fileName: 'demo-espacio.pdf', points, transform: t, createdAt: Date.now() });
+    if (t) {
+      saveCalibration({
+        planId: buildStaticPlanId('demo-espacio.pdf'),
+        fileName: 'demo-espacio.pdf',
+        points,
+        transform: t,
+        createdAt: Date.now(),
+      });
+    }
     setCalibrationPoints(points);
   }, []);
 
@@ -87,6 +97,7 @@ export default function Home() {
     setSourceUrl(url);
     setSourceType('pdf');
     setSourceFileName('demo-espacio.pdf');
+    setSourcePlanId(buildStaticPlanId('demo-espacio.pdf'));
     setSourceFile(null);
     setCalibrationPoints([]);
     setScreen('viewer');
@@ -106,15 +117,21 @@ export default function Home() {
 
   // ── Regular file upload ───────────────────────────────────────────
   const onFileSelected = useCallback((file: File, nextSourceType: PlanSourceType) => {
+    const planId = buildPlanId(file);
+
     setIsDemoMode(false);
     demoCalibratedRef.current = false;
     demoCanvasRef.current = null;
-    setSourceUrl(URL.createObjectURL(file));
+    setSourceUrl((prev) => {
+      if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev);
+      return URL.createObjectURL(file);
+    });
     setSourceType(nextSourceType);
     setSourceFileName(file.name);
+    setSourcePlanId(planId);
     setSourceFile(file);
 
-    const saved = loadCalibration(file.name);
+    const saved = loadCalibration(planId, file.name);
     if (saved && saved.points.length >= 2) {
       setCalibrationPoints(saved.points);
       setScreen('viewer');
@@ -128,9 +145,17 @@ export default function Home() {
   const onCalibrationComplete = useCallback((points: CalibrationPoint[]) => {
     setCalibrationPoints(points);
     const t = solveAffine(points);
-    if (t) saveCalibration({ fileName: sourceFileName, points, transform: t, createdAt: Date.now() });
+    if (t && sourcePlanId) {
+      saveCalibration({
+        planId: sourcePlanId,
+        fileName: sourceFileName,
+        points,
+        transform: t,
+        createdAt: Date.now(),
+      });
+    }
     setScreen('viewer');
-  }, [sourceFileName]);
+  }, [sourceFileName, sourcePlanId]);
 
   const onRecalibrate = () => {
     setCalibrationPoints([]);
@@ -144,6 +169,7 @@ export default function Home() {
     setSourceUrl(null);
     setSourceType(null);
     setSourceFileName('');
+    setSourcePlanId('');
     setSourceFile(null);
     setCalibrationPoints([]);
     setIsDemoMode(false);
@@ -155,7 +181,7 @@ export default function Home() {
 
   // ── Render ─────────────────────────────────────────────────────────
   if (screen === 'upload') {
-    return <UploadScreen onFileSelected={onFileSelected} onDemoMode={loadDemoMode} />;
+    return <UploadScreen onFileSelected={onFileSelected} />;
   }
 
   if (screen === 'calibrate' && sourceUrl && sourceType) {

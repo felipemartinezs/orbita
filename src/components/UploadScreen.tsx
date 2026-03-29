@@ -4,10 +4,9 @@ import { PlanSourceType } from '@/types';
 
 interface UploadScreenProps {
   onFileSelected: (file: File, sourceType: PlanSourceType) => void;
-  onDemoMode: () => void;
 }
 
-export default function UploadScreen({ onFileSelected, onDemoMode }: UploadScreenProps) {
+export default function UploadScreen({ onFileSelected }: UploadScreenProps) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const getSourceType = (file: File): PlanSourceType | null => {
@@ -47,17 +46,8 @@ export default function UploadScreen({ onFileSelected, onDemoMode }: UploadScree
         <p className="logo-sub">Planos inteligentes para técnicos de campo</p>
       </div>
 
-      {/* DEMO button — primary action for testing */}
-      <button className="demo-big-btn" onClick={onDemoMode}>
-        <span className="demo-btn-icon">🔵</span>
-        <div className="demo-btn-text">
-          <strong>Ver mi punto GPS ahora</strong>
-          <span>Demo instantáneo — sin calibración</span>
-        </div>
-      </button>
-
       <div className="upload-divider">
-        <span>o carga tu propio plano o captura</span>
+        <span>Carga tu plano o captura</span>
       </div>
 
       <div
