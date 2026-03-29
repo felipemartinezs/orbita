@@ -211,6 +211,76 @@ export default function PlanViewer({
     }
   }, [clearScheduledRefresh]);
 
+  // ── Draw overlay: blue dot + calibration dots ──────────────────────
+  const drawOverlay = useCallback(() => {
+    const canvas = overlayCanvasRef.current;
+    if (!canvas || canvas.width === 0) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const { resolutionFactor } = surfaceRef.current;
+    const zoom = Math.max(viewRef.current.scale, 0.2);
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(resolutionFactor, 0, 0, resolutionFactor, 0, 0);
+
+    const pinRadius = 11 / zoom;
+    const pinInnerRadius = 3.8 / zoom;
+    const accuracyScreenRadius = Math.min(18, 5 + (gpsAccuracy ?? 5) * 0.7);
+    const accuracyRadius = accuracyScreenRadius / zoom;
+    const markerRadius = 10 / zoom;
+    const markerStroke = Math.max(1, 1.8 / zoom);
+    const labelSize = Math.max(9, 11 / zoom);
+
+    calibrationPoints.forEach((pt, i) => {
+      ctx.beginPath();
+      ctx.arc(pt.pixel.x, pt.pixel.y, markerRadius, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255, 140, 0, 0.9)';
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = markerStroke;
+      ctx.stroke();
+      ctx.fillStyle = '#fff';
+      ctx.font = `bold ${labelSize}px system-ui`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(i + 1), pt.pixel.x, pt.pixel.y);
+    });
+
+    if (transform && gpsPosition) {
+      const px = gpsToPixel(gpsPosition, transform);
+
+      ctx.beginPath();
+      ctx.arc(px.x, px.y, accuracyRadius, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(66, 133, 244, 0.08)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(66,133,244,0.22)';
+      ctx.lineWidth = Math.max(0.8, 1 / zoom);
+      ctx.stroke();
+
+      const grad = ctx.createRadialGradient(px.x, px.y, pinInnerRadius, px.x, px.y, pinRadius);
+      grad.addColorStop(0, 'rgba(96, 167, 255, 0.92)');
+      grad.addColorStop(1, 'rgba(33, 105, 225, 0.86)');
+      ctx.beginPath();
+      ctx.arc(px.x, px.y, pinRadius, 0, Math.PI * 2);
+      ctx.fillStyle = grad;
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.88)';
+      ctx.lineWidth = Math.max(1.2, 2 / zoom);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(px.x, px.y, pinInnerRadius, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.fill();
+    }
+  }, [calibrationPoints, transform, gpsPosition, gpsAccuracy]);
+
+  const requestOverlayDraw = useCallback(() => {
+    cancelAnimationFrame(animRef.current);
+    animRef.current = requestAnimationFrame(drawOverlay);
+  }, [drawOverlay]);
+
   const renderPdfSurface = useCallback(async (
     requestedScale: number,
     options: { resetView?: boolean; reportRender?: boolean } = {},
@@ -292,7 +362,9 @@ export default function PlanViewer({
         onRendered?.(session.cssWidth, session.cssHeight, session.logicalScale);
       }
     }
-  }, [applyTransform, clampRenderScale, onRendered]);
+
+    requestOverlayDraw();
+  }, [applyTransform, clampRenderScale, onRendered, requestOverlayDraw]);
 
   const scheduleQualityRefresh = useCallback((delay = ZOOM_REFRESH_DELAY_MS) => {
     if (sourceType !== 'pdf') return;
@@ -533,81 +605,10 @@ export default function PlanViewer({
     teardownPdfSession,
   ]);
 
-  // ── Draw overlay: blue dot + calibration dots ──────────────────────
-  const drawOverlay = useCallback(() => {
-    const canvas = overlayCanvasRef.current;
-    if (!canvas || canvas.width === 0) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const { resolutionFactor } = surfaceRef.current;
-    const zoom = Math.max(viewRef.current.scale, 0.2);
-
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.setTransform(resolutionFactor, 0, 0, resolutionFactor, 0, 0);
-
-    const pinRadius = 11 / zoom;
-    const pinInnerRadius = 3.8 / zoom;
-    const accuracyScreenRadius = Math.min(18, 5 + (gpsAccuracy ?? 5) * 0.7);
-    const accuracyRadius = accuracyScreenRadius / zoom;
-    const markerRadius = 10 / zoom;
-    const markerStroke = Math.max(1, 1.8 / zoom);
-    const labelSize = Math.max(9, 11 / zoom);
-
-    // Calibration reference dots (orange numbered)
-    calibrationPoints.forEach((pt, i) => {
-      ctx.beginPath();
-      ctx.arc(pt.pixel.x, pt.pixel.y, markerRadius, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255, 140, 0, 0.9)';
-      ctx.fill();
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = markerStroke;
-      ctx.stroke();
-      ctx.fillStyle = '#fff';
-      ctx.font = `bold ${labelSize}px system-ui`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(String(i + 1), pt.pixel.x, pt.pixel.y);
-    });
-
-    // Blue GPS dot
-    if (transform && gpsPosition) {
-      const px = gpsToPixel(gpsPosition, transform);
-
-      // Accuracy ring
-      ctx.beginPath();
-      ctx.arc(px.x, px.y, accuracyRadius, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(66, 133, 244, 0.08)';
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(66,133,244,0.22)';
-      ctx.lineWidth = Math.max(0.8, 1 / zoom);
-      ctx.stroke();
-
-      // Blue dot
-      const grad = ctx.createRadialGradient(px.x, px.y, pinInnerRadius, px.x, px.y, pinRadius);
-      grad.addColorStop(0, 'rgba(96, 167, 255, 0.92)');
-      grad.addColorStop(1, 'rgba(33, 105, 225, 0.86)');
-      ctx.beginPath();
-      ctx.arc(px.x, px.y, pinRadius, 0, Math.PI * 2);
-      ctx.fillStyle = grad;
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(255,255,255,0.88)';
-      ctx.lineWidth = Math.max(1.2, 2 / zoom);
-      ctx.stroke();
-
-      // Inner white dot
-      ctx.beginPath();
-      ctx.arc(px.x, px.y, pinInnerRadius, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.92)';
-      ctx.fill();
-    }
-  }, [calibrationPoints, transform, gpsPosition, gpsAccuracy]);
-
   useEffect(() => {
-    cancelAnimationFrame(animRef.current);
-    animRef.current = requestAnimationFrame(drawOverlay);
+    requestOverlayDraw();
     return () => cancelAnimationFrame(animRef.current);
-  }, [drawOverlay]);
+  }, [requestOverlayDraw]);
 
   // ── Touch: pan + pinch ─────────────────────────────────────────────
   function onTouchStart(e: React.TouchEvent) {
