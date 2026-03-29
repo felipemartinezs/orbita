@@ -1,0 +1,81 @@
+%PDF-1.4
+1 0 obj
+<</Type /Catalog /Pages 2 0 R>>
+endobj
+2 0 obj
+<</Type /Pages /Kids [3 0 R] /Count 1>>
+endobj
+3 0 obj
+<</Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources <</Font <</F1 5 0 R>>>>>>
+endobj
+4 0 obj
+<</Length 1103>>
+stream
+q
+1 0 0 1 0 0 cm
+% Background
+0.95 0.95 0.92 rg
+0 0 612 792 re f
+% Grid lines (light gray)
+0.7 0.7 0.7 RG
+0.5 w
+% Horizontal lines
+50 100 m 562 100 l S
+50 200 m 562 200 l S
+50 300 m 562 300 l S
+50 400 m 562 400 l S
+50 500 m 562 500 l S
+50 600 m 562 600 l S
+50 700 m 562 700 l S
+% Vertical lines
+50  100 m  50  700 l S
+150 100 m 150 700 l S
+250 100 m 250 700 l S
+350 100 m 350 700 l S
+450 100 m 450 700 l S
+562 100 m 562 700 l S
+% Outer border (thick)
+0.2 0.2 0.2 RG
+2 w
+50 100 m 562 100 l 562 700 l 50 700 l 50 100 l S
+% Interior walls
+1.5 w
+50 400 m 350 400 l S
+350 100 m 350 400 l S
+250 400 m 250 700 l S
+% Labels
+0.1 0.1 0.1 rg
+BT /F1 14 Tf 200 730 Td (PLANO DE TIENDA - PRUEBA) Tj ET
+BT /F1 10 Tf 80 380 Td (ALMACEN) Tj ET
+BT /F1 10 Tf 390 380 Td (AREA DE VENTAS) Tj ET
+BT /F1 10 Tf 80 650 Td (OFICINAS) Tj ET
+BT /F1 10 Tf 260 650 Td (ENTRADA) Tj ET
+% Corner markers (for calibration)
+1 0 0 rg
+45 95 10 10 re f
+557 95 10 10 re f
+45 695 10 10 re f
+557 695 10 10 re f
+BT /F1 8 Tf 20 88 Td (NW) Tj ET
+BT /F1 8 Tf 555 88 Td (NE) Tj ET
+BT /F1 8 Tf 20 700 Td (SW) Tj ET
+BT /F1 8 Tf 555 700 Td (SE) Tj ET
+Q
+endstream
+endobj
+5 0 obj
+<</Type /Font /Subtype /Type1 /BaseFont /Helvetica>>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000056 00000 n 
+0000000111 00000 n 
+0000000231 00000 n 
+0000001384 00000 n 
+trailer
+<</Size 6 /Root 1 0 R>>
+startxref
+1452
+%%%%EOF

@@ -1,0 +1,126 @@
+%PDF-1.4
+1 0 obj
+<</Type /Catalog /Pages 2 0 R>>
+endobj
+2 0 obj
+<</Type /Pages /Kids [3 0 R] /Count 1>>
+endobj
+3 0 obj
+<</Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources <</Font <</F1 5 0 R>>>>>>
+endobj
+4 0 obj
+<</Length 1806>>
+stream
+q
+% Light background
+0.97 0.97 0.95 rg
+0 0 612 792 re f
+
+% Outer border - thick black
+0.15 0.15 0.15 RG
+3 w
+30 30 m 582 30 l 582 762 l 30 762 l 30 30 l S
+
+% Very light grid lines (navigation aid)
+0.82 0.82 0.82 RG
+0.5 w
+% Vertical grid lines - every 60px
+90 30 m 90 762 l S
+150 30 m 150 762 l S
+210 30 m 210 762 l S
+270 30 m 270 762 l S
+330 30 m 330 762 l S
+390 30 m 390 762 l S
+450 30 m 450 762 l S
+510 30 m 510 762 l S
+% Horizontal grid lines - every 60px
+30 90 m 582 90 l S
+30 150 m 582 150 l S
+30 210 m 582 210 l S
+30 270 m 582 270 l S
+30 330 m 582 330 l S
+30 390 m 582 390 l S
+30 450 m 582 450 l S
+30 510 m 582 510 l S
+30 570 m 582 570 l S
+30 630 m 582 630 l S
+30 690 m 582 690 l S
+
+% Center crosshair
+0.7 0.7 0.9 RG
+0.8 w
+306 30 m 306 762 l S
+30 396 m 582 396 l S
+
+% Center circle
+306 396 m
+0.6 0.6 0.85 RG
+264 396 m 264 396 30 0 360 re
+2 w
+306 396 20 0 360 re S
+
+% Compass rose - top right
+0.3 0.3 0.3 rg
+BT /F1 18 Tf 540 740 Td (N) Tj ET
+0.3 0.3 0.3 RG
+1 w
+552 730 m 552 715 l S
+548 720 m 552 730 l 556 720 l S
+
+% Title
+0.1 0.1 0.1 rg
+BT /F1 12 Tf 180 778 Td (ESPACIO ABIERTO - DEMO GPS) Tj ET
+
+% Scale bar
+0.2 0.2 0.2 rg
+BT /F1 9 Tf 35 15 Td (0) Tj ET
+BT /F1 9 Tf 83 15 Td (10m) Tj ET
+BT /F1 9 Tf 143 15 Td (20m) Tj ET
+0.3 0.3 0.3 RG
+1 w
+40 22 m 150 22 l S
+40 18 m 40 26 l S
+95 18 m 95 26 l S
+150 18 m 150 26 l S
+
+% Corner GPS anchor markers
+0.8 0.2 0.2 rg
+% SW (bottom-left) - PDF y-axis is bottom-up
+24 24 12 12 re f
+% SE (bottom-right)
+576 24 12 12 re f
+% NW (top-left)
+24 756 12 12 re f
+% NE (top-right)
+576 756 12 12 re f
+
+% Center marker
+0.2 0.4 0.9 rg
+299 389 14 14 re f
+0.1 0.1 0.1 rg
+BT /F1 8 Tf 265 375 Td (CENTRO - tu posicion) Tj ET
+
+% Cardinal labels
+BT /F1 9 Tf 32 745 Td (NW) Tj ET
+BT /F1 9 Tf 570 745 Td (NE) Tj ET
+BT /F1 9 Tf 32 22 Td (SW) Tj ET
+BT /F1 9 Tf 570 22 Td (SE) Tj ET
+Q
+endstream
+endobj
+5 0 obj
+<</Type /Font /Subtype /Type1 /BaseFont /Helvetica>>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000056 00000 n 
+0000000111 00000 n 
+0000000231 00000 n 
+0000002087 00000 n 
+trailer
+<</Size 6 /Root 1 0 R>>
+startxref
+2155
+%%%%EOF

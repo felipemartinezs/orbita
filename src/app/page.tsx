@@ -1,65 +1,257 @@
-import Image from "next/image";
+'use client';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { AppScreen, CalibrationPoint, PlanSourceType } from '@/types';
+import { useGeolocation } from '@/hooks/useGeolocation';
+import { useAffineMap } from '@/hooks/useAffineMap';
+import { saveCalibration, loadCalibration } from '@/lib/storage';
+import { solveAffine } from '@/lib/affine';
+import UploadScreen from '@/components/UploadScreen';
+import Calibration from '@/components/Calibration';
+import PlanViewer from '@/components/PlanViewer';
+import GpsStatus from '@/components/GpsStatus';
 
 export default function Home() {
-  return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+  const [screen, setScreen]                   = useState<AppScreen>('upload');
+  const [sourceUrl, setSourceUrl]             = useState<string | null>(null);
+  const [sourceType, setSourceType]           = useState<PlanSourceType | null>(null);
+  const [sourceFileName, setSourceFileName]   = useState<string>('');
+  const [calibrationPoints, setCalibrationPoints] = useState<CalibrationPoint[]>([]);
+  const [showMenu, setShowMenu]               = useState(false);
+
+  // Demo-mode state
+  const [isDemoMode, setIsDemoMode]           = useState(false);
+  const demoCalibratedRef                     = useRef(false);
+  // Stores canvas dims once PDF renders, so we can calibrate when GPS arrives later
+  const demoCanvasRef                         = useRef<{ w: number; h: number; scale: number } | null>(null);
+
+  const geo    = useGeolocation();
+  const { transform } = useAffineMap(calibrationPoints);
+
+  // ── Build demo calibration from canvas size + current GPS ─────────
+  const buildDemoCalibration = useCallback((
+    canvasW: number, canvasH: number, scale: number,
+    gps: { lat: number; lng: number },
+  ) => {
+    if (demoCalibratedRef.current) return;
+    demoCalibratedRef.current = true;
+
+    // demo-space.pdf is 612×792 pts.
+    // pdf.js renders y=0 at top, so PDF y → canvas y = (792 - pdfY) * scale
+    const sw = { x: 30 * scale,  y: (792 - 30)  * scale };   // bottom-left border (SW)
+    const ne = { x: 582 * scale, y: (792 - 762) * scale };   // top-right border (NE)
+
+    const metersPerDegLat = 111000;
+    const metersPerDegLng = 111000 * Math.cos(gps.lat * Math.PI / 180);
+    const widthM  = 50; // plan represents ~50m wide
+    const heightM = 65; // plan represents ~65m tall
+
+    const swGps = {
+      lat: gps.lat - (heightM * 0.5) / metersPerDegLat,
+      lng: gps.lng - (widthM  * 0.5) / metersPerDegLng,
+    };
+    const neGps = {
+      lat: gps.lat + (heightM * 0.5) / metersPerDegLat,
+      lng: gps.lng + (widthM  * 0.5) / metersPerDegLng,
+    };
+
+    const points: CalibrationPoint[] = [
+      { pixel: sw, gps: swGps },
+      { pixel: ne, gps: neGps },
+    ];
+
+    const t = solveAffine(points);
+    if (t) saveCalibration({ fileName: 'demo-espacio.pdf', points, transform: t, createdAt: Date.now() });
+    setCalibrationPoints(points);
+  }, []);
+
+  // ── When GPS arrives and we're in demo mode, auto-calibrate ───────
+  useEffect(() => {
+    if (!isDemoMode || demoCalibratedRef.current) return;
+    if (!geo.position || !demoCanvasRef.current) return;
+
+    const { w, h, scale } = demoCanvasRef.current;
+    buildDemoCalibration(w, h, scale, geo.position);
+  }, [isDemoMode, geo.position, buildDemoCalibration]);
+
+  // ── Demo mode: load PDF immediately, calibrate whenever GPS ready ──
+  const loadDemoMode = useCallback(async () => {
+    setIsDemoMode(true);
+    demoCalibratedRef.current = false;
+    demoCanvasRef.current = null;
+
+    const res = await fetch('/demo-space.pdf');
+    const blob = await res.blob();
+    const url  = URL.createObjectURL(blob);
+
+    setSourceUrl(url);
+    setSourceType('pdf');
+    setSourceFileName('demo-espacio.pdf');
+    setCalibrationPoints([]);
+    setScreen('viewer');
+    // Blue dot will appear automatically once GPS resolves
+  }, []);
+
+  // ── PlanViewer callback when PDF renders ──────────────────────────
+  const onPlanRendered = useCallback((canvasW: number, canvasH: number, scale: number) => {
+    if (!isDemoMode) return;
+    demoCanvasRef.current = { w: canvasW, h: canvasH, scale };
+
+    // If GPS already available, calibrate now; otherwise the useEffect above handles it
+    if (geo.position && !demoCalibratedRef.current) {
+      buildDemoCalibration(canvasW, canvasH, scale, geo.position);
+    }
+  }, [isDemoMode, geo.position, buildDemoCalibration]);
+
+  // ── Regular file upload ───────────────────────────────────────────
+  const onFileSelected = useCallback((file: File, url: string, nextSourceType: PlanSourceType) => {
+    setIsDemoMode(false);
+    demoCalibratedRef.current = false;
+    demoCanvasRef.current = null;
+    setSourceUrl(url);
+    setSourceType(nextSourceType);
+    setSourceFileName(file.name);
+
+    const saved = loadCalibration(file.name);
+    if (saved && saved.points.length >= 2) {
+      setCalibrationPoints(saved.points);
+      setScreen('viewer');
+    } else {
+      setCalibrationPoints([]);
+      setScreen('calibrate');
+    }
+  }, []);
+
+  // ── Calibration complete (manual) ─────────────────────────────────
+  const onCalibrationComplete = useCallback((points: CalibrationPoint[]) => {
+    setCalibrationPoints(points);
+    const t = solveAffine(points);
+    if (t) saveCalibration({ fileName: sourceFileName, points, transform: t, createdAt: Date.now() });
+    setScreen('viewer');
+  }, [sourceFileName]);
+
+  const onRecalibrate = () => {
+    setCalibrationPoints([]);
+    demoCalibratedRef.current = false;
+    setScreen('calibrate');
+    setShowMenu(false);
+  };
+
+  const onChangePdf = () => {
+    if (sourceUrl?.startsWith('blob:')) URL.revokeObjectURL(sourceUrl);
+    setSourceUrl(null);
+    setSourceType(null);
+    setSourceFileName('');
+    setCalibrationPoints([]);
+    setIsDemoMode(false);
+    demoCalibratedRef.current = false;
+    demoCanvasRef.current = null;
+    setScreen('upload');
+    setShowMenu(false);
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────
+  if (screen === 'upload') {
+    return <UploadScreen onFileSelected={onFileSelected} onDemoMode={loadDemoMode} />;
+  }
+
+  if (screen === 'calibrate' && sourceUrl && sourceType) {
+    return (
+      <Calibration
+        sourceUrl={sourceUrl}
+        sourceType={sourceType}
+        currentGps={geo.position}
+        onComplete={onCalibrationComplete}
+        onCancel={() => {
+          if (calibrationPoints.length >= 2) setScreen('viewer');
+          else setScreen('upload');
+        }}
+      />
+    );
+  }
+
+  if (screen === 'viewer' && sourceUrl && sourceType) {
+    const isDemo = isDemoMode;
+    const isWaitingGps = isDemo && calibrationPoints.length < 2;
+    const gpsDenied = geo.permissionState === 'denied';
+
+    return (
+      <div className="viewer-shell">
+        <div className="viewer-topbar">
+          <div className="topbar-left">
+            <span className="topbar-logo">📐 Orbita</span>
+            <span className="topbar-filename">
+              {isDemo ? '🗺 Demo GPS en vivo' : sourceFileName}
+            </span>
+          </div>
+          <div className="topbar-right">
+            <GpsStatus accuracy={geo.accuracy} error={geo.error} watching={geo.watching} />
+            <button className="btn-icon" onClick={() => setShowMenu((v) => !v)}>⋮</button>
+          </div>
+        </div>
+
+        {/* GPS permission prompt — most important screen for iOS */}
+        {geo.permissionState === 'unknown' && !geo.watching && (
+          <div className="gps-prompt-overlay">
+            <div className="gps-prompt-card">
+              <div className="gps-prompt-icon">📍</div>
+              <h2 className="gps-prompt-title">Activa tu ubicación</h2>
+              <p className="gps-prompt-text">
+                Toca el botón para que la app pueda mostrarte en el plano
+              </p>
+              <button className="btn-primary gps-prompt-btn" onClick={() => geo.start()}>
+                Activar GPS ahora
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* GPS denied error */}
+        {gpsDenied && (
+          <div className="calib-pill calib-pill-warn">
+            ⚠️ Ubicación bloqueada — ve a Ajustes → Safari → Ubicación → Permitir
+          </div>
+        )}
+
+        {/* Status banner */}
+        {!gpsDenied && geo.watching && (
+          isWaitingGps ? (
+            <div className="calib-pill calib-pill-warn">
+              <span className="waiting-dot" />
+              Adquiriendo señal GPS…
+            </div>
+          ) : calibrationPoints.length >= 2 ? (
+            <div className="calib-pill">
+              {isDemo
+                ? '🔵 Este punto azul eres tú — camina para verlo moverse'
+                : `✓ ${calibrationPoints.length} puntos de calibración`}
+            </div>
+          ) : null
+        )}
+
+        <PlanViewer
+          sourceUrl={sourceUrl}
+          sourceType={sourceType}
+          calibrationPoints={isDemo ? [] : calibrationPoints}
+          transform={transform}
+          gpsPosition={geo.position}
+          gpsAccuracy={geo.accuracy}
+          tapMode={false}
+          onRendered={onPlanRendered}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
-  );
+
+        {showMenu && (
+          <div className="overflow-menu">
+            <button onClick={onRecalibrate}>🔧 Recalibrar plano</button>
+            <button onClick={() => { setScreen('calibrate'); setShowMenu(false); }}>
+              ➕ Agregar punto de calibración
+            </button>
+            <button onClick={onChangePdf}>📂 Cambiar archivo</button>
+            <button onClick={() => setShowMenu(false)}>✕ Cerrar</button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return null;
 }
