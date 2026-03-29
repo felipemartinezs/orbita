@@ -1,5 +1,6 @@
 'use client';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist/types/src/pdf';
 import { AffineTransform, CalibrationPoint, GpsPoint, PixelPoint, PlanSourceType } from '@/types';
 import { gpsToPixel } from '@/lib/affine';
 
@@ -8,12 +9,27 @@ let pdfjsLib: typeof import('pdfjs-dist/legacy/build/pdf.mjs') | null = null;
 let workerConfigured = false;
 const MAX_PDF_RENDER_PIXELS = 14_000_000;
 const CONTENT_THRESHOLD = 247;
+const ZOOM_REFRESH_DELAY_MS = 140;
 
 interface CropRatios {
   x: number;
   y: number;
   width: number;
   height: number;
+}
+
+interface PdfRenderSession {
+  pdf: PDFDocumentProxy;
+  page: PDFPageProxy;
+  containerWidth: number;
+  containerHeight: number;
+  naturalWidth: number;
+  naturalHeight: number;
+  crop: CropRatios;
+  logicalScale: number;
+  cssWidth: number;
+  cssHeight: number;
+  resolutionFactor: number;
 }
 
 interface PlanViewerProps {
@@ -28,6 +44,11 @@ interface PlanViewerProps {
   tapMode?: boolean;
   /** Called once PDF is rendered with (canvasW, canvasH, pdfScale) */
   onRendered?: (canvasW: number, canvasH: number, scale: number) => void;
+}
+
+function isCancelledRender(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  return /cancel/i.test(`${error.name} ${error.message}`);
 }
 
 export default function PlanViewer({
@@ -53,6 +74,12 @@ export default function PlanViewer({
   const viewRef = useRef({ x: 0, y: 0, scale: 1 });
   const lastTouchRef = useRef<{ x: number; y: number; dist: number } | null>(null);
   const animRef = useRef<number>(0);
+
+  const pdfSessionRef = useRef<PdfRenderSession | null>(null);
+  const renderTaskRef = useRef<RenderTask | null>(null);
+  const rerenderTimerRef = useRef<number | null>(null);
+  const renderVersionRef = useRef(0);
+  const qualityBoostRef = useRef(1);
 
   const getResolutionFactor = useCallback(() => {
     if (typeof window === 'undefined') return 2;
@@ -137,13 +164,168 @@ export default function PlanViewer({
     };
   }, []);
 
+  const applyTransform = useCallback(() => {
+    const wrapper = containerRef.current?.querySelector<HTMLDivElement>('.plan-wrapper');
+    if (!wrapper) return;
+    const { x, y, scale } = viewRef.current;
+    wrapper.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+    wrapper.style.transformOrigin = '0 0';
+  }, []);
+
+  const clearScheduledRefresh = useCallback(() => {
+    if (rerenderTimerRef.current !== null) {
+      window.clearTimeout(rerenderTimerRef.current);
+      rerenderTimerRef.current = null;
+    }
+  }, []);
+
+  const teardownPdfSession = useCallback(() => {
+    clearScheduledRefresh();
+    renderVersionRef.current += 1;
+    renderTaskRef.current?.cancel();
+    renderTaskRef.current = null;
+    qualityBoostRef.current = 1;
+
+    const currentSession = pdfSessionRef.current;
+    pdfSessionRef.current = null;
+    if (currentSession) {
+      void currentSession.pdf.destroy().catch(() => undefined);
+    }
+  }, [clearScheduledRefresh]);
+
+  const renderPdfSurface = useCallback(async (
+    requestedBoost: number,
+    options: { resetView?: boolean; reportRender?: boolean } = {},
+  ) => {
+    const session = pdfSessionRef.current;
+    const canvas = pdfCanvasRef.current;
+    if (!session || !canvas) return;
+
+    const { resetView = false, reportRender = false } = options;
+    const boundedBoost = Math.min(Math.max(requestedBoost, 1), 8);
+    const targetScale = session.logicalScale * session.resolutionFactor * boundedBoost;
+    const renderScale = clampRenderScale(session.naturalWidth, session.naturalHeight, targetScale);
+    const effectiveBoost = Math.max(1, renderScale / (session.logicalScale * session.resolutionFactor));
+    const viewport = session.page.getViewport({ scale: renderScale });
+    const renderCanvas = document.createElement('canvas');
+    renderCanvas.width = Math.max(1, Math.floor(viewport.width));
+    renderCanvas.height = Math.max(1, Math.floor(viewport.height));
+
+    const renderCtx = renderCanvas.getContext('2d', { alpha: false });
+    if (!renderCtx) {
+      throw new Error('No se pudo preparar el render del PDF');
+    }
+
+    renderVersionRef.current += 1;
+    const renderToken = renderVersionRef.current;
+    renderTaskRef.current?.cancel();
+    const renderTask = session.page.render({ canvasContext: renderCtx, canvas: renderCanvas, viewport });
+    renderTaskRef.current = renderTask;
+
+    try {
+      await renderTask.promise;
+    } catch (error) {
+      if (isCancelledRender(error)) return;
+      throw error;
+    }
+
+    if (renderToken !== renderVersionRef.current) return;
+
+    const cropX = Math.floor(renderCanvas.width * session.crop.x);
+    const cropY = Math.floor(renderCanvas.height * session.crop.y);
+    const cropW = Math.max(1, Math.floor(renderCanvas.width * session.crop.width));
+    const cropH = Math.max(1, Math.floor(renderCanvas.height * session.crop.height));
+
+    canvas.width = cropW;
+    canvas.height = cropH;
+    canvas.style.width = `${session.cssWidth}px`;
+    canvas.style.height = `${session.cssHeight}px`;
+
+    const visibleCtx = canvas.getContext('2d', { alpha: false });
+    if (!visibleCtx) {
+      throw new Error('No se pudo pintar el canvas del plano');
+    }
+
+    visibleCtx.clearRect(0, 0, cropW, cropH);
+    visibleCtx.imageSmoothingEnabled = true;
+    visibleCtx.imageSmoothingQuality = 'high';
+    visibleCtx.drawImage(renderCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+    renderTaskRef.current = null;
+    qualityBoostRef.current = effectiveBoost;
+
+    if (resetView) {
+      const overlay = overlayCanvasRef.current;
+      if (overlay) {
+        overlay.width = Math.max(1, Math.floor(session.cssWidth * session.resolutionFactor));
+        overlay.height = Math.max(1, Math.floor(session.cssHeight * session.resolutionFactor));
+        overlay.style.width = `${session.cssWidth}px`;
+        overlay.style.height = `${session.cssHeight}px`;
+      }
+
+      surfaceRef.current = {
+        cssWidth: session.cssWidth,
+        cssHeight: session.cssHeight,
+        resolutionFactor: session.resolutionFactor,
+      };
+      viewRef.current = {
+        x: (session.containerWidth - session.cssWidth) / 2,
+        y: (session.containerHeight - session.cssHeight) / 2,
+        scale: 1,
+      };
+      applyTransform();
+      setLoaded(true);
+      if (reportRender) {
+        onRendered?.(session.cssWidth, session.cssHeight, session.logicalScale);
+      }
+    }
+  }, [applyTransform, clampRenderScale, onRendered]);
+
+  const scheduleQualityRefresh = useCallback((delay = ZOOM_REFRESH_DELAY_MS) => {
+    if (sourceType !== 'pdf') return;
+    if (!pdfSessionRef.current) return;
+
+    const currentBoost = qualityBoostRef.current;
+    const targetBoost = Math.min(Math.max(viewRef.current.scale * 1.15, 1), 6);
+    const relativeDelta = Math.abs(targetBoost - currentBoost) / Math.max(currentBoost, 1);
+
+    if (relativeDelta < 0.2) return;
+
+    clearScheduledRefresh();
+    rerenderTimerRef.current = window.setTimeout(() => {
+      rerenderTimerRef.current = null;
+      void renderPdfSurface(targetBoost).catch((refreshError: unknown) => {
+        if (!isCancelledRender(refreshError)) {
+          console.error('PDF refresh error:', refreshError);
+        }
+      });
+    }, delay);
+  }, [clearScheduledRefresh, renderPdfSurface, sourceType]);
+
   // ── Load plan source via ResizeObserver so we know container dims ──
   useEffect(() => {
     let cancelled = false;
+    let bootstrapTask: RenderTask | null = null;
+
     setLoaded(false);
     setError(null);
+    teardownPdfSession();
 
-    const finalizeRender = (
+    const renderIntoCanvas = async (page: PDFPageProxy, pageScale: number) => {
+      const viewport = page.getViewport({ scale: pageScale });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.floor(viewport.width));
+      canvas.height = Math.max(1, Math.floor(viewport.height));
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('No se pudo crear el canvas del plano');
+
+      bootstrapTask = page.render({ canvasContext: ctx, canvas, viewport });
+      await bootstrapTask.promise;
+      bootstrapTask = null;
+      return { canvas, viewport };
+    };
+
+    const applyImageLayout = (
       containerW: number,
       containerH: number,
       cssWidth: number,
@@ -160,7 +342,6 @@ export default function PlanViewer({
       }
 
       surfaceRef.current = { cssWidth, cssHeight, resolutionFactor };
-
       viewRef.current = {
         x: (containerW - cssWidth) / 2,
         y: (containerH - cssHeight) / 2,
@@ -169,20 +350,6 @@ export default function PlanViewer({
       applyTransform();
       setLoaded(true);
       onRendered?.(cssWidth, cssHeight, scale);
-    };
-
-    const renderIntoCanvas = async (
-      page: Awaited<ReturnType<NonNullable<typeof pdfjsLib>['getDocument']>> extends never ? never : Awaited<ReturnType<any>>,
-      pageScale: number,
-    ) => {
-      const viewport = page.getViewport({ scale: pageScale });
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.floor(viewport.width));
-      canvas.height = Math.max(1, Math.floor(viewport.height));
-      const ctx = canvas.getContext('2d');
-      if (!ctx) throw new Error('No se pudo crear el canvas del plano');
-      await page.render({ canvasContext: ctx, canvas, viewport }).promise;
-      return { canvas, viewport };
     };
 
     const renderPdf = async (containerW: number, containerH: number) => {
@@ -207,10 +374,16 @@ export default function PlanViewer({
 
         const loadingTask = pdfjsLib.getDocument(loadingSource);
         const pdf = await loadingTask.promise;
-        if (cancelled) return;
+        if (cancelled) {
+          void pdf.destroy().catch(() => undefined);
+          return;
+        }
 
         const page = await pdf.getPage(1);
-        if (cancelled) return;
+        if (cancelled) {
+          void pdf.destroy().catch(() => undefined);
+          return;
+        }
 
         const naturalViewport = page.getViewport({ scale: 1 });
         const baseScale = fitScale(containerW, containerH, naturalViewport.width, naturalViewport.height);
@@ -219,8 +392,12 @@ export default function PlanViewer({
           naturalViewport.height,
           baseScale * Math.min(window.devicePixelRatio || 1, 2),
         );
+
         const { canvas: analysisCanvas } = await renderIntoCanvas(page, analysisScale);
-        if (cancelled) return;
+        if (cancelled) {
+          void pdf.destroy().catch(() => undefined);
+          return;
+        }
 
         const crop = detectContentCrop(analysisCanvas);
         const fullCssWidth = naturalViewport.width * baseScale;
@@ -228,41 +405,24 @@ export default function PlanViewer({
         const cropCssWidth = fullCssWidth * crop.width;
         const cropCssHeight = fullCssHeight * crop.height;
         const cropBoost = Math.max(1, Math.min(containerW / cropCssWidth, containerH / cropCssHeight) * 0.98);
-        const finalLogicalScale = baseScale * cropBoost;
+        const logicalScale = baseScale * cropBoost;
         const resolutionFactor = getResolutionFactor();
-        const finalRenderScale = clampRenderScale(
-          naturalViewport.width,
-          naturalViewport.height,
-          finalLogicalScale * resolutionFactor,
-        );
-        const actualResolution = finalRenderScale / finalLogicalScale;
-        const { canvas: renderedCanvas } = await renderIntoCanvas(page, finalRenderScale);
-        if (cancelled) return;
 
-        const cropX = Math.floor(renderedCanvas.width * crop.x);
-        const cropY = Math.floor(renderedCanvas.height * crop.y);
-        const cropW = Math.max(1, Math.floor(renderedCanvas.width * crop.width));
-        const cropH = Math.max(1, Math.floor(renderedCanvas.height * crop.height));
-        const cssWidth = cropW / actualResolution;
-        const cssHeight = cropH / actualResolution;
+        pdfSessionRef.current = {
+          pdf,
+          page,
+          containerWidth: containerW,
+          containerHeight: containerH,
+          naturalWidth: naturalViewport.width,
+          naturalHeight: naturalViewport.height,
+          crop,
+          logicalScale,
+          cssWidth: naturalViewport.width * logicalScale * crop.width,
+          cssHeight: naturalViewport.height * logicalScale * crop.height,
+          resolutionFactor,
+        };
 
-        const canvas = pdfCanvasRef.current;
-        if (!canvas) return;
-        canvas.width = cropW;
-        canvas.height = cropH;
-        canvas.style.width = `${cssWidth}px`;
-        canvas.style.height = `${cssHeight}px`;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-
-        ctx.clearRect(0, 0, cropW, cropH);
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(renderedCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-        if (cancelled) return;
-
-        await pdf.destroy();
-        finalizeRender(containerW, containerH, cssWidth, cssHeight, finalLogicalScale, actualResolution);
+        await renderPdfSurface(1, { resetView: true, reportRender: true });
       } catch (e: unknown) {
         if (!cancelled) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -302,7 +462,7 @@ export default function PlanViewer({
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(img, 0, 0, w, h);
-        finalizeRender(containerW, containerH, cssWidth, cssHeight, scale, resolutionFactor);
+        applyImageLayout(containerW, containerH, cssWidth, cssHeight, scale, resolutionFactor);
       };
       img.onerror = () => {
         if (!cancelled) {
@@ -312,7 +472,6 @@ export default function PlanViewer({
       img.src = sourceUrl;
     };
 
-    // Use ResizeObserver to wait until the container has real dimensions
     const container = containerRef.current;
     if (!container) return;
 
@@ -322,26 +481,44 @@ export default function PlanViewer({
       const { width, height } = entry.contentRect;
       if (width > 10 && height > 10) {
         observer.disconnect();
-        if (sourceType === 'pdf') renderPdf(width, height);
-        else renderImage(width, height);
+        if (sourceType === 'pdf') {
+          void renderPdf(width, height);
+        } else {
+          renderImage(width, height);
+        }
       }
     });
     observer.observe(container);
 
-    // Also try immediately if it already has size
     const rect = container.getBoundingClientRect();
     if (rect.width > 10 && rect.height > 10) {
       observer.disconnect();
-      if (sourceType === 'pdf') renderPdf(rect.width, rect.height);
-      else renderImage(rect.width, rect.height);
+      if (sourceType === 'pdf') {
+        void renderPdf(rect.width, rect.height);
+      } else {
+        renderImage(rect.width, rect.height);
+      }
     }
 
     return () => {
       cancelled = true;
       observer.disconnect();
+      bootstrapTask?.cancel();
+      teardownPdfSession();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceFile, sourceType, sourceUrl]);
+  }, [
+    applyTransform,
+    clampRenderScale,
+    detectContentCrop,
+    fitScale,
+    getResolutionFactor,
+    onRendered,
+    renderPdfSurface,
+    sourceFile,
+    sourceType,
+    sourceUrl,
+    teardownPdfSession,
+  ]);
 
   // ── Draw overlay: blue dot + calibration dots ──────────────────────
   const drawOverlay = useCallback(() => {
@@ -416,20 +593,13 @@ export default function PlanViewer({
   useEffect(() => {
     cancelAnimationFrame(animRef.current);
     animRef.current = requestAnimationFrame(drawOverlay);
+    return () => cancelAnimationFrame(animRef.current);
   }, [drawOverlay]);
-
-  // ── CSS transform helper ───────────────────────────────────────────
-  function applyTransform() {
-    const wrapper = containerRef.current?.querySelector<HTMLDivElement>('.plan-wrapper');
-    if (!wrapper) return;
-    const { x, y, scale } = viewRef.current;
-    wrapper.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
-    wrapper.style.transformOrigin = '0 0';
-  }
 
   // ── Touch: pan + pinch ─────────────────────────────────────────────
   function onTouchStart(e: React.TouchEvent) {
-    if (tapMode) return; // tap mode handled separately
+    if (tapMode) return;
+    clearScheduledRefresh();
     e.stopPropagation();
     if (e.touches.length === 1) {
       lastTouchRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, dist: 0 };
@@ -467,17 +637,20 @@ export default function PlanViewer({
       v.y = midY - (midY - v.y) * (newScale / v.scale);
       v.scale = newScale;
       lastTouchRef.current = { x: midX, y: midY, dist: newDist };
+      scheduleQualityRefresh();
     }
     applyTransform();
   }
 
   function onTouchEnd() {
     lastTouchRef.current = null;
+    scheduleQualityRefresh(90);
   }
 
   // Mouse wheel zoom (desktop testing)
   function onWheel(e: React.WheelEvent) {
     e.preventDefault();
+    clearScheduledRefresh();
     const v = viewRef.current;
     const delta = e.deltaY > 0 ? 0.9 : 1.1;
     const newScale = Math.min(Math.max(v.scale * delta, 0.2), 10);
@@ -488,6 +661,7 @@ export default function PlanViewer({
     v.y = cy - (cy - v.y) * (newScale / v.scale);
     v.scale = newScale;
     applyTransform();
+    scheduleQualityRefresh(90);
   }
 
   // ── Tap for calibration ────────────────────────────────────────────
