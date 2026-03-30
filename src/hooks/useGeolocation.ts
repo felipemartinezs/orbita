@@ -20,6 +20,7 @@ export function useGeolocation() {
   });
   const watchId = useRef<number | null>(null);
   const retryTimer = useRef<number | null>(null);
+  const startRef = useRef<() => void>(() => undefined);
 
   const clearRetry = useCallback(() => {
     if (retryTimer.current !== null) {
@@ -27,6 +28,55 @@ export function useGeolocation() {
       retryTimer.current = null;
     }
   }, []);
+
+  const handleSuccess = useCallback((pos: GeolocationPosition) => {
+    clearRetry();
+    setState({
+      position: { lat: pos.coords.latitude, lng: pos.coords.longitude },
+      accuracy: pos.coords.accuracy,
+      error: null,
+      watching: true,
+      permissionState: 'granted',
+    });
+  }, [clearRetry]);
+
+  const handleWatchError = useCallback((err: GeolocationPositionError) => {
+    console.error('Geolocation error:', err.code, err.message);
+    if (watchId.current !== null) {
+      navigator.geolocation.clearWatch(watchId.current);
+      watchId.current = null;
+    }
+
+    setState((s) => ({
+      ...s,
+      error: err.code === 1
+        ? 'Permiso denegado. Ve a Ajustes → Safari → Ubicación → Permitir'
+        : err.message,
+      watching: false,
+      permissionState: err.code === 1 ? 'denied' : (s.permissionState === 'granted' ? 'granted' : 'unknown'),
+    }));
+
+    if (err.code !== 1) {
+      clearRetry();
+      retryTimer.current = window.setTimeout(() => {
+        retryTimer.current = null;
+        startRef.current();
+      }, 1500);
+    }
+  }, [clearRetry]);
+
+  const handleSnapshotError = useCallback((err: GeolocationPositionError) => {
+    if (err.code === 1) {
+      handleWatchError(err);
+      return;
+    }
+
+    setState((s) => ({
+      ...s,
+      error: s.position ? null : err.message,
+      permissionState: s.permissionState === 'granted' ? 'granted' : 'unknown',
+    }));
+  }, [handleWatchError]);
 
   const start = useCallback(() => {
     if (!navigator.geolocation) {
@@ -45,44 +95,20 @@ export function useGeolocation() {
       permissionState: s.permissionState === 'granted' ? 'granted' : 'asking',
     }));
 
+    navigator.geolocation.getCurrentPosition(
+      handleSuccess,
+      handleSnapshotError,
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 2000 },
+    );
+
     watchId.current = navigator.geolocation.watchPosition(
-      (pos) => {
-        clearRetry();
-        setState({
-          position: { lat: pos.coords.latitude, lng: pos.coords.longitude },
-          accuracy: pos.coords.accuracy,
-          error: null,
-          watching: true,
-          permissionState: 'granted',
-        });
-      },
-      (err) => {
-        console.error('Geolocation error:', err.code, err.message);
-        if (watchId.current !== null) {
-          navigator.geolocation.clearWatch(watchId.current);
-          watchId.current = null;
-        }
-
-        setState((s) => ({
-          ...s,
-          error: err.code === 1
-            ? 'Permiso denegado. Ve a Ajustes → Safari → Ubicación → Permitir'
-            : err.message,
-          watching: false,
-          permissionState: err.code === 1 ? 'denied' : (s.permissionState === 'granted' ? 'granted' : 'unknown'),
-        }));
-
-        if (err.code !== 1) {
-          clearRetry();
-          retryTimer.current = window.setTimeout(() => {
-            retryTimer.current = null;
-            start();
-          }, 1500);
-        }
-      },
+      handleSuccess,
+      handleWatchError,
       { enableHighAccuracy: true, maximumAge: 2000 },
     );
-  }, [clearRetry]);
+  }, [clearRetry, handleSnapshotError, handleSuccess, handleWatchError]);
+
+  startRef.current = start;
 
   const stop = useCallback(() => {
     clearRetry();
